@@ -13,8 +13,8 @@ if not exist "%VCVARS%" (
 :: Настраиваем окружение компилятора
 call "%VCVARS%" >nul 2>&1
 
-echo [INFO] Компиляция модели термодинамики воды...
-cl /EHsc /O2 /std:c++17 /utf-8 src\main.cpp src\physics\thermo\WaterPhaseModel.cpp src\physics\thermo\WaterRegimeCatalog.cpp src\app\Application.cpp user32.lib gdi32.lib /Fe:sim.exe
+echo [INFO] Компиляция молекулярной динамики воды...
+cl /EHsc /O2 /std:c++17 /utf-8 src\main.cpp src\physics\md\WaterMolecularDynamics.cpp src\app\Application.cpp user32.lib gdi32.lib /Fe:sim.exe
 
 if %ERRORLEVEL% EQU 0 (
     echo [SUCCESS] Сборка завершена. Запуск sim.exe...

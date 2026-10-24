@@ -1,65 +1,63 @@
 #include "Application.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 namespace {
-const wchar_t* phaseLabel(WaterPhaseModel::Region region) {
-    switch (region) {
-    case WaterPhaseModel::Region::LiquidVaporMixture:
-        return L"Жидкость и пар";
-    case WaterPhaseModel::Region::SaturatedLiquid:
-        return L"Насыщенная жидкость";
-    case WaterPhaseModel::Region::SaturatedVapor:
-        return L"Насыщенный пар";
-    case WaterPhaseModel::Region::OutsideLiquidVaporCoexistence:
-        return L"Вне области сосуществования";
-    case WaterPhaseModel::Region::TriplePoint:
-        return L"Тройная точка: лёд, жидкость и пар";
-    case WaterPhaseModel::Region::CriticalPoint:
-        return L"Критическая точка";
-    case WaterPhaseModel::Region::Unsupported:
-    default:
-        return L"Условия вне модели";
-    }
+using watermd::Vec3;
+
+std::wstring formatValue(double value, int decimals = 2) {
+    std::wostringstream output;
+    output << std::fixed << std::setprecision(decimals) << value;
+    return output.str();
 }
 
-COLORREF phaseColor(WaterPhaseModel::Region region) {
-    switch (region) {
-    case WaterPhaseModel::Region::LiquidVaporMixture:
-    case WaterPhaseModel::Region::SaturatedLiquid:
-    case WaterPhaseModel::Region::SaturatedVapor:
-        return RGB(90, 210, 240);
-    case WaterPhaseModel::Region::TriplePoint:
-        return RGB(255, 205, 100);
-    case WaterPhaseModel::Region::CriticalPoint:
-        return RGB(200, 150, 255);
-    default:
-        return RGB(255, 130, 120);
-    }
-}
-
-void drawText(HDC dc, int x, int y, const std::wstring& value,
-              COLORREF color, int height = 28) {
-    SetTextColor(dc, color);
-    RECT bounds{x, y, 1180, y + height};
-    DrawTextW(dc, value.c_str(), -1, &bounds, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-}
-
-void drawWrappedText(HDC dc, int x, int y, int width, int height,
-                     const std::wstring& value, COLORREF color) {
+void drawText(HDC dc, int x, int y, int width, int height,
+              const std::wstring& value, COLORREF color,
+              UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE) {
     SetTextColor(dc, color);
     RECT bounds{x, y, x + width, y + height};
-    DrawTextW(dc, value.c_str(), -1, &bounds, DT_LEFT | DT_WORDBREAK);
+    DrawTextW(dc, value.c_str(), -1, &bounds, format);
 }
 
-std::wstring fixedValue(double value, int decimals = 2) {
-    const std::wstring text = std::to_wstring(value);
-    const std::size_t decimalPoint = text.find(L'.');
-    if (decimalPoint == std::wstring::npos) {
-        return text;
+void drawLine(HDC dc, int x1, int y1, int x2, int y2, COLORREF color, int width = 1) {
+    HPEN pen = CreatePen(PS_SOLID, width, color);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    MoveToEx(dc, x1, y1, nullptr);
+    LineTo(dc, x2, y2);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+}
+
+void drawAtom(HDC dc, int x, int y, int radius, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, x - radius, y - radius, x + radius + 1, y + radius + 1);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(brush);
+}
+
+Vec3 minimumImage(Vec3 displacement, double boxLengthA) {
+    displacement.x -= boxLengthA * std::round(displacement.x / boxLengthA);
+    displacement.y -= boxLengthA * std::round(displacement.y / boxLengthA);
+    displacement.z -= boxLengthA * std::round(displacement.z / boxLengthA);
+    return displacement;
+}
+
+std::wstring observedStructure(const watermd::Measurements& measurements) {
+    if (measurements.averageOxygenNeighbors < 1.5) {
+        return L"Разреженная газоподобная структура";
     }
-    return text.substr(0, decimalPoint + decimals + 1);
+    if (measurements.tetrahedralOrder > 0.78) {
+        return L"Упорядоченная структура, похожая на лёд";
+    }
+    return L"Плотная неупорядоченная структура, похожая на жидкость";
 }
 }
 
@@ -78,128 +76,118 @@ int Application::run() {
 }
 
 void Application::updateDashboard() {
-    const WaterPhaseModel::Result state =
-        waterModel_.evaluate(temperatureK_, densityKgM3_);
-
-    std::wstring title = L"Вода: ";
-    title += phaseLabel(state.region);
-    title += L" | T=" + fixedValue(temperatureK_) + L" K";
+    std::wstring title = L"Движение молекул воды | T=";
+    title += formatValue(targetTemperatureK_, 1);
+    title += L" K, P=" + formatValue(targetPressureMPa_, 3) + L" MPa";
     SetWindowTextW(window_, title.c_str());
-    InvalidateRect(window_, nullptr, TRUE);
+    InvalidateRect(window_, nullptr, FALSE);
 }
 
 void Application::drawDashboard(HDC dc) const {
-    const WaterPhaseModel::Result state =
-        waterModel_.evaluate(temperatureK_, densityKgM3_);
-
     RECT client{};
     GetClientRect(window_, &client);
-    HBRUSH background = CreateSolidBrush(RGB(15, 21, 32));
+    HBRUSH background = CreateSolidBrush(RGB(12, 18, 29));
     FillRect(dc, &client, background);
     DeleteObject(background);
     SetBkMode(dc, TRANSPARENT);
 
-    drawText(dc, 48, 34, L"Состояние воды", RGB(240, 245, 255), 42);
-    drawText(dc, 48, 100, phaseLabel(state.region), phaseColor(state.region), 36);
+    const int boxLeft = 52;
+    const int boxTop = 92;
+    const int boxSide = (std::min)(480, client.bottom - 190);
+    const int panelLeft = boxLeft + static_cast<int>(boxSide * 1.32) + 45;
+    const int panelWidth = (std::max)(250, client.right - panelLeft - 35);
+    const double boxLength = waterSimulation_.boxLengthA();
 
-    const double temperatureC = temperatureK_ - 273.15;
-    drawText(dc, 48, 170,
-        L"Температура: " + fixedValue(temperatureK_) + L" K  (" +
-        fixedValue(temperatureC) + L" °C)",
-        RGB(220, 230, 245));
-    drawText(dc, 48, 212,
-        L"Общая плотность: " + fixedValue(densityKgM3_) + L" кг/м³",
-        RGB(220, 230, 245));
+    drawText(dc, 48, 24, client.right - 96, 42,
+        L"Молекулы воды: движение из сил между атомами",
+        RGB(240, 245, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    if (state.pressureAvailable) {
-        drawText(dc, 48, 254,
-            L"Давление насыщения: " + fixedValue(state.pressurePa / 1.0e6, 4) +
-            L" МПа",
-            RGB(220, 230, 245));
-    } else {
-        drawText(dc, 48, 254,
-            L"Давление: эта модель его не рассчитывает для однофазного состояния",
-            RGB(255, 180, 150));
+    // Показываем кубическую периодическую ячейку как 3D-проекцию.
+    auto project = [&](const Vec3& position) {
+        const double px = position.x / boxLength + 0.25 * position.z / boxLength;
+        const double py = position.y / boxLength + 0.18 * position.z / boxLength;
+        return POINT{
+            boxLeft + static_cast<int>(px * boxSide),
+            boxTop + static_cast<int>(py * boxSide)
+        };
+    };
+
+    std::array<Vec3, 8> corners{};
+    for (int i = 0; i < 8; ++i) {
+        corners[static_cast<std::size_t>(i)] = {
+            (i & 1) ? boxLength : 0.0,
+            (i & 2) ? boxLength : 0.0,
+            (i & 4) ? boxLength : 0.0
+        };
+    }
+    for (int i = 0; i < 8; ++i) {
+        for (int axis = 0; axis < 3; ++axis) {
+            const int j = i ^ (1 << axis);
+            if (j > i) {
+                const POINT a = project(corners[static_cast<std::size_t>(i)]);
+                const POINT b = project(corners[static_cast<std::size_t>(j)]);
+                drawLine(dc, a.x, a.y, b.x, b.y, RGB(65, 82, 105));
+            }
+        }
     }
 
-    if (state.region == WaterPhaseModel::Region::LiquidVaporMixture) {
-        drawText(dc, 48, 296,
-            L"Насыщенная жидкость: " + fixedValue(state.liquidDensityKgM3) +
-            L" кг/м³",
-            RGB(140, 200, 255));
-        drawText(dc, 48, 338,
-            L"Насыщенный пар: " + fixedValue(state.vaporDensityKgM3, 4) +
-            L" кг/м³",
-            RGB(255, 190, 120));
-        drawText(dc, 48, 380,
-            L"Доля пара по массе: " +
-            fixedValue(state.vaporMassFraction * 100.0, 3) + L"%",
-            RGB(220, 230, 245));
+    const auto& molecules = waterSimulation_.molecules();
+    for (const watermd::WaterMolecule& molecule : molecules) {
+        const Vec3 oxygen = molecule.atoms[0].positionA;
+        for (std::size_t hydrogenIndex = 1; hydrogenIndex < 3; ++hydrogenIndex) {
+            const Vec3 bond = minimumImage(
+                molecule.atoms[hydrogenIndex].positionA - oxygen, boxLength);
+            const POINT oxygenPoint = project(oxygen);
+            const POINT hydrogenPoint = project(oxygen + bond);
+            drawLine(dc, oxygenPoint.x, oxygenPoint.y,
+                hydrogenPoint.x, hydrogenPoint.y, RGB(96, 125, 157), 2);
+            drawAtom(dc, hydrogenPoint.x, hydrogenPoint.y, 3, RGB(195, 222, 255));
+        }
 
-        RECT bar{48, 430, 948, 454};
-        HBRUSH liquidBrush = CreateSolidBrush(RGB(70, 145, 220));
-        FillRect(dc, &bar, liquidBrush);
-        DeleteObject(liquidBrush);
-
-        const int vaporWidth = static_cast<int>(
-            (bar.right - bar.left) * state.vaporMassFraction);
-        RECT vaporBar{bar.right - vaporWidth, bar.top, bar.right, bar.bottom};
-        HBRUSH vaporBrush = CreateSolidBrush(RGB(245, 160, 75));
-        FillRect(dc, &vaporBar, vaporBrush);
-        DeleteObject(vaporBrush);
-    } else if (state.region == WaterPhaseModel::Region::TriplePoint) {
-        drawText(dc, 48, 296,
-            L"В тройной точке могут сосуществовать три фазы. "
-            L"Их доли эта модель не рассчитывает.",
-            RGB(230, 220, 200));
-    } else if (state.region == WaterPhaseModel::Region::CriticalPoint) {
-        drawText(dc, 48, 296,
-            L"Плотность в критической точке: 322 кг/м³",
-            RGB(230, 220, 200));
-    } else {
-        drawText(dc, 48, 296, L"Двухфазная доля не вычислена.",
-            RGB(230, 220, 200));
+        const POINT oxygenPoint = project(oxygen);
+        drawAtom(dc, oxygenPoint.x, oxygenPoint.y, 6, RGB(72, 190, 255));
     }
 
-    drawText(dc, 48, 530,
-        L"Управление: вверх/вниз — температура, влево/вправо — плотность, Home — сброс.",
-        RGB(165, 180, 205), 32);
-    drawText(dc, 48, 580,
-        L"Справочник: Page Up / Page Down. Расчёт: только равновесие жидкости и пара.",
-        RGB(130, 145, 170), 32);
+    const watermd::Measurements& measured = waterSimulation_.measurements();
+    drawText(dc, panelLeft, 94, panelWidth, 34,
+        L"Условия системы", RGB(240, 245, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(dc, panelLeft, 138, panelWidth, 28,
+        L"Целевая температура: " + formatValue(targetTemperatureK_, 1) + L" K",
+        RGB(205, 220, 240));
+    drawText(dc, panelLeft, 172, panelWidth, 28,
+        L"Измеренная температура: " + formatValue(measured.temperatureK, 1) + L" K",
+        RGB(205, 220, 240));
+    drawText(dc, panelLeft, 206, panelWidth, 28,
+        L"Целевое давление: " + formatValue(targetPressureMPa_, 3) + L" МПа",
+        RGB(205, 220, 240));
+    drawText(dc, panelLeft, 240, panelWidth, 28,
+        L"Измеренное давление: " + formatValue(measured.pressureMPa, 3) + L" МПа",
+        RGB(205, 220, 240));
+    drawText(dc, panelLeft, 274, panelWidth, 28,
+        L"Плотность: " + formatValue(measured.densityKgM3, 1) + L" кг/м³",
+        RGB(205, 220, 240));
 
-    drawRegimeCatalog(dc);
-}
+    drawText(dc, panelLeft, 326, panelWidth, 32,
+        L"Что видно по атомам", RGB(240, 245, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(dc, panelLeft, 366, panelWidth, 60,
+        observedStructure(measured), RGB(111, 222, 180),
+        DT_LEFT | DT_WORDBREAK | DT_TOP);
+    drawText(dc, panelLeft, 432, panelWidth, 52,
+        L"Тетраэдрический порядок: " + formatValue(measured.tetrahedralOrder, 3),
+        RGB(205, 220, 240), DT_LEFT | DT_WORDBREAK | DT_TOP);
+    drawText(dc, panelLeft, 482, panelWidth, 48,
+        L"Среднее число соседних атомов O: " +
+            formatValue(measured.averageOxygenNeighbors, 2),
+        RGB(205, 220, 240), DT_LEFT | DT_WORDBREAK | DT_TOP);
 
-void Application::drawRegimeCatalog(HDC dc) const {
-    const auto& regimes = WaterRegimeCatalog::all();
-    const int x = 650;
-    const int width = 560;
-    const WaterRegimeInfo& regime = regimes[selectedRegimeIndex_];
-
-    drawText(dc, x, 34, L"Девять режимов вещества", RGB(240, 245, 255), 42);
-    drawWrappedText(dc, x, 78, width, 42,
-        L"Page Up / Page Down листают карточки. Это описание, не переключатель фаз.",
-        RGB(165, 180, 205));
-
-    std::wstring counter = L"Карточка " +
-        std::to_wstring(selectedRegimeIndex_ + 1) + L" из " +
-        std::to_wstring(regimes.size());
-    drawText(dc, x, 132, counter, RGB(165, 180, 205), 28);
-    drawWrappedText(dc, x, 178, width, 48, regime.name,
-        RGB(110, 205, 240));
-
-    drawText(dc, x, 238, L"Как ведёт себя вещество", RGB(240, 245, 255), 28);
-    drawWrappedText(dc, x, 274, width, 92, regime.behavior,
-        RGB(220, 230, 245));
-
-    drawText(dc, x, 382, L"При каких условиях", RGB(240, 245, 255), 28);
-    drawWrappedText(dc, x, 418, width, 100, regime.conditions,
-        RGB(190, 200, 220));
-
-    drawText(dc, x, 534, L"Что умеет текущая модель", RGB(240, 245, 255), 28);
-    drawWrappedText(dc, x, 570, width, 92, regime.modelNote,
-        RGB(255, 190, 145));
+    drawText(dc, panelLeft, 548, panelWidth, 78,
+        L"Стрелки вверх/вниз: температура. Вправо/влево: давление. Home: сброс. "
+        L"Атомы движутся по 3D-модели типа SPC/Fw; окно показывает проекцию. "
+        L"Это приближение: электростатика обрезана на радиусе взаимодействия.",
+        RGB(151, 169, 195), DT_LEFT | DT_WORDBREAK | DT_TOP);
+    drawText(dc, 48, client.bottom - 34, client.right - 96, 24,
+        L"Расчёт классический: он показывает молекулярную воду, но не распад молекул, плазму, БЭК или ферми-вырождение.",
+        RGB(125, 143, 169), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 LRESULT CALLBACK Application::windowProc(
@@ -217,6 +205,12 @@ LRESULT CALLBACK Application::windowProc(
         EndPaint(window, &paint);
         return 0;
     }
+    case WM_TIMER:
+        if (app) {
+            app->waterSimulation_.advance(24);
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
     case WM_KEYDOWN:
         if (!app) {
             break;
@@ -225,35 +219,30 @@ LRESULT CALLBACK Application::windowProc(
             DestroyWindow(window);
             return 0;
         }
-        if (wParam == VK_PRIOR) {
-            const std::size_t count = WaterRegimeCatalog::all().size();
-            app->selectedRegimeIndex_ =
-                (app->selectedRegimeIndex_ + count - 1) % count;
-        } else if (wParam == VK_NEXT) {
-            const std::size_t count = WaterRegimeCatalog::all().size();
-            app->selectedRegimeIndex_ =
-                (app->selectedRegimeIndex_ + 1) % count;
-        } else if (wParam == VK_UP) {
-            app->temperatureK_ = std::min(
-                app->temperatureK_ + 1.0,
-                WaterPhaseModel::CRITICAL_POINT_K);
+        if (wParam == VK_UP) {
+            app->targetTemperatureK_ = (std::min)(
+                app->targetTemperatureK_ + 10.0, 600.0);
         } else if (wParam == VK_DOWN) {
-            app->temperatureK_ = std::max(
-                app->temperatureK_ - 1.0,
-                WaterPhaseModel::TRIPLE_POINT_K);
+            app->targetTemperatureK_ = (std::max)(
+                app->targetTemperatureK_ - 10.0, 80.0);
         } else if (wParam == VK_RIGHT) {
-            app->densityKgM3_ = std::min(app->densityKgM3_ * 1.1, 1500.0);
+            app->targetPressureMPa_ = (std::min)(
+                app->targetPressureMPa_ * 1.25, 100.0);
         } else if (wParam == VK_LEFT) {
-            app->densityKgM3_ = std::max(app->densityKgM3_ / 1.1, 0.001);
+            app->targetPressureMPa_ = (std::max)(
+                app->targetPressureMPa_ / 1.25, 0.001);
         } else if (wParam == VK_HOME) {
-            app->temperatureK_ = 373.15;
-            app->densityKgM3_ = 50.0;
+            app->targetTemperatureK_ = 300.0;
+            app->targetPressureMPa_ = 0.1;
         } else {
             return 0;
         }
+        app->waterSimulation_.setTargetTemperature(app->targetTemperatureK_);
+        app->waterSimulation_.setTargetPressure(app->targetPressureMPa_);
         app->updateDashboard();
         return 0;
     case WM_DESTROY:
+        KillTimer(window, 1);
         PostQuitMessage(0);
         return 0;
     }
@@ -267,7 +256,7 @@ void Application::createWindow() {
     WNDCLASSW windowClass{};
     windowClass.lpfnWndProc = windowProc;
     windowClass.hInstance = instance;
-    windowClass.lpszClassName = L"WaterThermodynamicsWindow";
+    windowClass.lpszClassName = L"WaterMolecularDynamicsWindow";
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(
         GetStockObject(BLACK_BRUSH));
@@ -278,7 +267,7 @@ void Application::createWindow() {
 
     window_ = CreateWindowW(
         windowClass.lpszClassName,
-        L"Симуляция термодинамики воды",
+        L"Движение молекул воды",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -290,5 +279,6 @@ void Application::createWindow() {
         nullptr);
 
     SetWindowLongPtrW(window_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    SetTimer(window_, 1, 16, nullptr);
     ShowWindow(window_, SW_SHOW);
 }

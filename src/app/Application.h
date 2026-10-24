@@ -1,9 +1,12 @@
 #pragma once
 
-#include <cstddef>
+// Запрещает Windows.h объявлять макросы min и max,
+// которые мешают вызовам std::min и std::max.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
-#include "../physics/thermo/WaterPhaseModel.h"
-#include "../physics/thermo/WaterRegimeCatalog.h"
+#include "../physics/md/WaterMolecularDynamics.h"
 
 // Оконное приложение для исследования равновесия воды.
 class Application {
@@ -22,13 +25,11 @@ public:
 
 private:
     HWND window_ = nullptr;
-    WaterPhaseModel waterModel_;
-    double temperatureK_ = 373.15;
-    double densityKgM3_ = 50.0;
-    std::size_t selectedRegimeIndex_ = 0;
+    watermd::WaterMolecularDynamics waterSimulation_;
+    double targetTemperatureK_ = 300.0;
+    double targetPressureMPa_ = 0.1;
 
     void createWindow();
     void updateDashboard();
     void drawDashboard(HDC deviceContext) const;
-    void drawRegimeCatalog(HDC deviceContext) const;
 };
